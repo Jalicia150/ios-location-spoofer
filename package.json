@@ -1,0 +1,8 @@
+{
+  "name": "ios-location-spoofer-scripts",
+  "private": true,
+  "scripts": {
+    "check": "node --check location-spoofer.js && node --check location-spoofer-qx.js",
+    "test": "node --test test/*.test.js"
+  }
+}
