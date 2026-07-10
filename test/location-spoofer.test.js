@@ -225,7 +225,7 @@ test("Shadowrocket request mode is reachable and returns a local HTTP 200 respon
       headers: {},
       body: requestBody
     },
-    $argument: "mode=request&metadataMode=preserve&latitude=1.25&longitude=2.5",
+    $argument: "mode=request&metadataMode=preserve&nativeBinary=true&latitude=1.25&longitude=2.5",
     $done: (value) => {
       completed = value;
     },
@@ -240,7 +240,9 @@ test("Shadowrocket request mode is reachable and returns a local HTTP 200 respon
 
   assert.equal(completed.response.status, 200);
   assert.equal(completed.response.headers["Content-Type"], "application/octet-stream");
-  assert.ok(completed.response.body.length > 10);
+  assert.ok(completed.response.body instanceof ArrayBuffer);
+  assert.ok(completed.response.body.byteLength > 10);
+  eq(new Uint8Array(completed.response.body).slice(0, 8), api.APPLE_WLOC_PREFIX);
 });
 
 test("HTTP errors are passed through instead of being parsed as protobuf", () => {
