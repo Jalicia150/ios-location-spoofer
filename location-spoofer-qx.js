@@ -7,6 +7,7 @@
 
   var DEFAULT_CONFIG = {
     enabled: true,
+    metadataMode: "legacy",
     latitude: 37.3349,
     longitude: -122.00902,
     horizontalAccuracy: 39,
@@ -21,9 +22,9 @@
 
   var APPLE_WLOC_PREFIX = new Uint8Array([0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00]);
   var APPLE_WLOC_MARKER = new Uint8Array([0x00, 0x00, 0x00, 0x01, 0x00, 0x00]);
-  var ROOT_DROP_FIELDS = { 3: true, 4: true, 33: true };
+  var LEGACY_ROOT_DROP_FIELDS = { 3: true, 4: true, 33: true };
   var CELL_RESPONSE_FIELDS = { 22: true, 24: true };
-  var LOCATION_REPLACED_FIELDS = { 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 11: true, 12: true };
+  var LEGACY_LOCATION_REPLACED_FIELDS = { 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 11: true, 12: true };
 
   // ========== Byte Utilities ==========
 
@@ -213,15 +214,34 @@
 
   function patchLocation(locationPayload, config) {
     var parts = [], fields = locationPayload.length ? parseFields(locationPayload) : [];
-    for (var i = 0; i < fields.length; i++) { if (!LOCATION_REPLACED_FIELDS[fields[i].fieldNumber]) parts.push(fields[i].raw); }
-    parts.push(makeVarintField(1, coordToInt(config.latitude)));
-    parts.push(makeVarintField(2, coordToInt(config.longitude)));
-    parts.push(makeVarintField(3, config.horizontalAccuracy));
-    parts.push(makeVarintField(4, config.unknownValue4));
-    parts.push(makeVarintField(5, config.altitude));
-    parts.push(makeVarintField(6, config.verticalAccuracy));
-    parts.push(makeVarintField(11, config.motionActivityType));
-    parts.push(makeVarintField(12, config.motionActivityConfidence));
+    var i;
+    if (config.metadataMode === "legacy") {
+      for (i = 0; i < fields.length; i++) { if (!LEGACY_LOCATION_REPLACED_FIELDS[fields[i].fieldNumber]) parts.push(fields[i].raw); }
+      parts.push(makeVarintField(1, coordToInt(config.latitude)));
+      parts.push(makeVarintField(2, coordToInt(config.longitude)));
+      parts.push(makeVarintField(3, config.horizontalAccuracy));
+      parts.push(makeVarintField(4, config.unknownValue4));
+      parts.push(makeVarintField(5, config.altitude));
+      parts.push(makeVarintField(6, config.verticalAccuracy));
+      parts.push(makeVarintField(11, config.motionActivityType));
+      parts.push(makeVarintField(12, config.motionActivityConfidence));
+      return concatBytes(parts);
+    }
+
+    var latitude = coordToInt(config.latitude), longitude = coordToInt(config.longitude);
+    var latitudeSeen = false, longitudeSeen = false;
+    for (i = 0; i < fields.length; i++) {
+      var field = fields[i];
+      if (field.fieldNumber === 1 && field.wireType === 0) {
+        parts.push(makeVarintField(1, latitude)); latitudeSeen = true;
+      } else if (field.fieldNumber === 2 && field.wireType === 0) {
+        parts.push(makeVarintField(2, longitude)); longitudeSeen = true;
+      } else {
+        parts.push(field.raw);
+      }
+    }
+    if (!latitudeSeen) parts.push(makeVarintField(1, latitude));
+    if (!longitudeSeen) parts.push(makeVarintField(2, longitude));
     return concatBytes(parts);
   }
 
@@ -253,7 +273,7 @@
       var field = fields[i];
       if (field.fieldNumber === 2 && field.wireType === 2) { parts.push(makeLengthDelimitedField(2, patchWifiDevice(field.valueBytes, config))); wifiCount += 1; }
       else if (isCellResponseField(field.fieldNumber) && field.wireType === 2) { parts.push(makeLengthDelimitedField(field.fieldNumber, patchCellTower(field.valueBytes, config))); cellCount += 1; }
-      else if (!ROOT_DROP_FIELDS[field.fieldNumber]) parts.push(field.raw);
+      else if (config.metadataMode !== "legacy" || !LEGACY_ROOT_DROP_FIELDS[field.fieldNumber]) parts.push(field.raw);
     }
     return { payload: concatBytes(parts), wifiCount: wifiCount, cellCount: cellCount };
   }
@@ -333,6 +353,7 @@
     input = input || {};
     for (key in input) { if (Object.prototype.hasOwnProperty.call(input, key)) cfg[key] = input[key]; }
     cfg.enabled = cfg.enabled !== false;
+    cfg.metadataMode = String(cfg.metadataMode || "legacy").toLowerCase() === "preserve" ? "preserve" : "legacy";
     cfg.latitude = Number(cfg.latitude); cfg.longitude = Number(cfg.longitude);
     cfg.horizontalAccuracy = Math.trunc(Number(cfg.horizontalAccuracy));
     cfg.verticalAccuracy = Math.trunc(Number(cfg.verticalAccuracy));
