@@ -1,0 +1,9 @@
+#!name=iOS Location Spoofer (iOS 27 Experimental)
+#!desc=实验性请求侧 WLOC 合成：在请求到达 Apple 前返回本地伪造响应，并仅替换经纬度。适用于 Shadowrocket。
+#!homepage=https://github.com/Jalicia150/ios-location-spoofer
+
+[Script]
+iOS Location Spoofer (iOS 27 Experimental) = type=http-request,pattern=^https?:\/\/(?:gs-loc(?:-cn)?\.apple\.com|bluedot\.is\.autonavi\.com(?:\.gds\.alibabadns\.com)?)\/clls\/wloc(?:\?.*)?$,requires-body=1,binary-body-mode=1,max-size=1048576,timeout=10,script-path=https://raw.githubusercontent.com/Jalicia150/ios-location-spoofer/666d0201b12c62b4533322e7920dfdb99750f86e/location-spoofer.js,argument=mode=request&metadataMode=preserve&latitude=37.3349&longitude=-122.00902&debug=false
+
+[MITM]
+hostname = %APPEND% gs-loc.apple.com, gs-loc-cn.apple.com, bluedot.is.autonavi.com, bluedot.is.autonavi.com.gds.alibabadns.com
