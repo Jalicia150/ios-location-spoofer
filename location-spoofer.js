@@ -12,6 +12,7 @@
   var DEFAULT_CONFIG = {
     enabled: true,
     mode: "response",
+    metadataMode: "legacy",
     latitude: 37.3349,
     longitude: -122.00902,
     horizontalAccuracy: 39,
@@ -35,9 +36,9 @@
   // Stable marker that precedes the AppleWLoc protobuf inside a REAL Apple /clls/wloc
   // response. After the marker come 2 bytes (uint16 BE payload length) then the payload.
   var APPLE_WLOC_MARKER = bytesFromArray([0x00, 0x00, 0x00, 0x01, 0x00, 0x00]);
-  var ROOT_DROP_FIELDS = { 3: true, 4: true, 33: true };
+  var LEGACY_ROOT_DROP_FIELDS = { 3: true, 4: true, 33: true };
   var CELL_RESPONSE_FIELDS = { 22: true, 24: true };
-  var LOCATION_REPLACED_FIELDS = {
+  var LEGACY_LOCATION_REPLACED_FIELDS = {
     1: true,
     2: true,
     3: true,
@@ -449,6 +450,8 @@
     cfg.failOpen = parseBoolean(cfg.failOpen, true);
     var mode = String(cfg.mode || "response").toLowerCase();
     cfg.mode = mode === "request" || mode === "prepare" || mode === "probe" || mode === "inspect" ? mode : "response";
+    var metadataMode = String(cfg.metadataMode || "legacy").toLowerCase();
+    cfg.metadataMode = metadataMode === "legacy" ? "legacy" : "preserve";
     cfg.latitude = Number(cfg.latitude);
     cfg.longitude = Number(cfg.longitude);
     cfg.horizontalAccuracy = Math.trunc(Number(cfg.horizontalAccuracy));
@@ -477,20 +480,49 @@
   function patchLocation(locationPayload, config) {
     var parts = [];
     var fields = locationPayload.length ? parseFields(locationPayload) : [];
-    for (var i = 0; i < fields.length; i += 1) {
-      if (!LOCATION_REPLACED_FIELDS[fields[i].fieldNumber]) {
-        parts.push(fields[i].raw);
+    var i;
+
+    if (config.metadataMode === "legacy") {
+      for (i = 0; i < fields.length; i += 1) {
+        if (!LEGACY_LOCATION_REPLACED_FIELDS[fields[i].fieldNumber]) {
+          parts.push(fields[i].raw);
+        }
       }
+      parts.push(makeVarintField(1, coordToInt(config.latitude)));
+      parts.push(makeVarintField(2, coordToInt(config.longitude)));
+      parts.push(makeVarintField(3, config.horizontalAccuracy));
+      parts.push(makeVarintField(4, config.unknownValue4));
+      parts.push(makeVarintField(5, config.altitude));
+      parts.push(makeVarintField(6, config.verticalAccuracy));
+      parts.push(makeVarintField(11, config.motionActivityType));
+      parts.push(makeVarintField(12, config.motionActivityConfidence));
+      return concatBytes(parts);
     }
 
-    parts.push(makeVarintField(1, coordToInt(config.latitude)));
-    parts.push(makeVarintField(2, coordToInt(config.longitude)));
-    parts.push(makeVarintField(3, config.horizontalAccuracy));
-    parts.push(makeVarintField(4, config.unknownValue4));
-    parts.push(makeVarintField(5, config.altitude));
-    parts.push(makeVarintField(6, config.verticalAccuracy));
-    parts.push(makeVarintField(11, config.motionActivityType));
-    parts.push(makeVarintField(12, config.motionActivityConfidence));
+    // Joy-cwz compatibility mode: splice only correctly typed latitude/longitude
+    // fields and preserve every other field's original bytes, order and duplicates.
+    var latitude = coordToInt(config.latitude);
+    var longitude = coordToInt(config.longitude);
+    var latitudeSeen = false;
+    var longitudeSeen = false;
+    for (i = 0; i < fields.length; i += 1) {
+      var field = fields[i];
+      if (field.fieldNumber === 1 && field.wireType === 0) {
+        parts.push(makeVarintField(1, latitude));
+        latitudeSeen = true;
+      } else if (field.fieldNumber === 2 && field.wireType === 0) {
+        parts.push(makeVarintField(2, longitude));
+        longitudeSeen = true;
+      } else {
+        parts.push(field.raw);
+      }
+    }
+    if (!latitudeSeen) {
+      parts.push(makeVarintField(1, latitude));
+    }
+    if (!longitudeSeen) {
+      parts.push(makeVarintField(2, longitude));
+    }
     return concatBytes(parts);
   }
 
@@ -552,7 +584,7 @@
       } else if (isCellResponseField(field.fieldNumber) && field.wireType === 2) {
         parts.push(makeLengthDelimitedField(field.fieldNumber, patchCellTower(field.valueBytes, config)));
         cellCount += 1;
-      } else if (!ROOT_DROP_FIELDS[field.fieldNumber]) {
+      } else if (config.metadataMode !== "legacy" || !LEGACY_ROOT_DROP_FIELDS[field.fieldNumber]) {
         parts.push(field.raw);
       }
     }
@@ -801,6 +833,7 @@
     var tailKeys = [
       "debug",
       "mode",
+      "metadataMode",
       "enabled",
       "latitude",
       "longitude",
@@ -1154,6 +1187,7 @@
     var scalarKeys = [
       "enabled",
       "mode",
+      "metadataMode",
       "latitude",
       "longitude",
       "address",
@@ -1777,7 +1811,25 @@
     });
   }
 
+  function responseStatusCode(response) {
+    response = response || {};
+    var raw = response.statusCode != null ? response.statusCode : response.status;
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      return raw;
+    }
+    var match = String(raw || "").match(/\b(\d{3})\b/);
+    return match ? Number(match[1]) : 0;
+  }
+
   function continueResponseRewrite(config) {
+    var responseStatus = responseStatusCode($response);
+    if (responseStatus && (responseStatus < 200 || responseStatus >= 300)) {
+      if (config.debug) {
+        console.log("Location spoofer upstream HTTP " + responseStatus + "; response is not a WLOC payload, passing through");
+      }
+      donePassThrough();
+      return;
+    }
     var responseBody = messageBodyToBytes($response);
     if (!responseBody || responseBody.length < 2) {
       if (config.debug) {
@@ -1840,12 +1892,15 @@
     }
 
     if (hasRequest && !hasResponse) {
-      var prepArgs = readScriptArguments();
-      if (parseBoolean(prepArgs.debug, false)) {
-        console.log("Location spoofer prepare -> Accept-Encoding: identity");
+      var requestArgs = readScriptArguments();
+      var requestedMode = String(requestArgs.mode || "prepare").toLowerCase();
+      if (requestedMode !== "request" && requestedMode !== "inspect") {
+        if (parseBoolean(requestArgs.debug, false)) {
+          console.log("Location spoofer prepare -> Accept-Encoding: identity");
+        }
+        donePreparedRequestPassThrough();
+        return;
       }
-      donePreparedRequestPassThrough();
-      return;
     }
 
     loadRuntimeConfig(function (config) {
