@@ -17,7 +17,8 @@ This repo re-implements that core logic in JavaScript and adapts it to five prox
 - **Multi-platform support** — from a single iOS app to five proxy apps.
 - **Cell-tower coordinate rewriting** — the Go original only rewrote Wi-Fi hotspot coordinates; the JS version also rewrites CellTower coordinates (fields 22/24).
 - **Multiple response-format compatibility** — auto-detects Apple's response envelope (ARPC / synthetic / marker / bare) so the rewritten payload is still accepted by iOS.
-- **Motion-state spoofing** — also rewrites `motionActivityType` and `motionActivityConfidence` to reduce the chance of detection.
+- **Optional byte-preserving metadata mode** — `metadataMode=preserve` changes only latitude/longitude while retaining Apple accuracy, altitude, motion, device-type and unknown fields.
+- **Existing configurations remain compatible** — standard modules continue to default to `metadataMode=legacy` and retain the earlier metadata rewrite.
 
 ## How it works
 
@@ -36,6 +37,15 @@ This project intercepts Apple's reply on the way back and rewrites every coordin
 | Stash | `ios-location-spoofer.stoverride` | Override → Install Override | ✅ Verified |
 
 > Tested it? Please report results in Issues. If something doesn't work, PRs are welcome — at minimum include **which app, which version, which iOS, and the raw error log**.
+
+### Experimental iOS 27 mode for Shadowrocket
+
+[`ios-location-spoofer-ios27-experimental.sgmodule`](ios-location-spoofer-ios27-experimental.sgmodule) combines acheong08's request-side local-response design with Joy-cwz's byte-preserving coordinate rewrite:
+
+1. Replace only protobuf latitude/longitude fields while preserving every other field's original bytes.
+2. Attempt to return a local synthetic HTTP 200 WLOC response before the request reaches Apple, avoiding the `400 Bad Request` observed on iOS 27 betas.
+
+This is **experimental, not a guarantee of iOS 27 support**. It has passed local script tests but still needs validation on a real Shadowrocket/iOS 27 device to confirm the local response suppresses the upstream request. Do not enable it together with the standard response module. Parsing failures remain fail-open and send the original request onward, where Apple may still return the original `400 Bad Request`.
 
 ## Usage
 
@@ -67,10 +77,11 @@ latitude=39.9042&longitude=116.4074
 |------|---------|-------------|
 | `latitude` | 37.3349 | Target latitude |
 | `longitude` | -122.00902 | Target longitude |
+| `metadataMode` | legacy | `preserve` changes only coordinates; `legacy` uses the old metadata rewrite |
 | `address` | (empty) | Address search (entered in the Loon plugin UI; resolved to coordinates online; takes precedence over manual lat/lng) |
-| `horizontalAccuracy` | 39 | Horizontal accuracy |
-| `verticalAccuracy` | 1000 | Vertical accuracy |
-| `altitude` | 530 | Altitude |
+| `horizontalAccuracy` | 39 | Horizontal accuracy, used only in `legacy` mode |
+| `verticalAccuracy` | 1000 | Vertical accuracy, used only in `legacy` mode |
+| `altitude` | 530 | Altitude, used only in `legacy` mode |
 | `failOpen` | true | Pass the original data through on error |
 | `debug` | false | Debug logging |
 
@@ -78,6 +89,7 @@ latitude=39.9042&longitude=116.4074
 
 ```
 ios-location-spoofer.sgmodule       # Shadowrocket
+ios-location-spoofer-ios27-experimental.sgmodule # Shadowrocket request-side experiment
 ios-location-spoofer-surge.sgmodule # Surge
 ios-location-spoofer.lnplugin       # Loon
 ios-location-spoofer.snippet        # Quantumult X
