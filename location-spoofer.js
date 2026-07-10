@@ -13,6 +13,7 @@
     enabled: true,
     mode: "response",
     metadataMode: "legacy",
+    nativeBinary: false,
     latitude: 37.3349,
     longitude: -122.00902,
     horizontalAccuracy: 39,
@@ -32,7 +33,6 @@
   // Prefix prepended to a SPOOFED (synthesized) response. Mirrors the original Go
   // `initialBytes = 0001000000010000` from main.go:253.
   var APPLE_WLOC_PREFIX = bytesFromArray([0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00]);
-
   // Stable marker that precedes the AppleWLoc protobuf inside a REAL Apple /clls/wloc
   // response. After the marker come 2 bytes (uint16 BE payload length) then the payload.
   var APPLE_WLOC_MARKER = bytesFromArray([0x00, 0x00, 0x00, 0x01, 0x00, 0x00]);
@@ -452,6 +452,7 @@
     cfg.mode = mode === "request" || mode === "prepare" || mode === "probe" || mode === "inspect" ? mode : "response";
     var metadataMode = String(cfg.metadataMode || "legacy").toLowerCase();
     cfg.metadataMode = metadataMode === "legacy" ? "legacy" : "preserve";
+    cfg.nativeBinary = cfg.nativeBinary === true || String(cfg.nativeBinary).toLowerCase() === "true";
     cfg.latitude = Number(cfg.latitude);
     cfg.longitude = Number(cfg.longitude);
     cfg.horizontalAccuracy = Math.trunc(Number(cfg.horizontalAccuracy));
@@ -834,6 +835,7 @@
       "debug",
       "mode",
       "metadataMode",
+      "nativeBinary",
       "enabled",
       "latitude",
       "longitude",
@@ -1188,6 +1190,7 @@
       "enabled",
       "mode",
       "metadataMode",
+      "nativeBinary",
       "latitude",
       "longitude",
       "address",
@@ -1766,10 +1769,6 @@
 
   function doneSyntheticResponse(bytes, info) {
     var headers = headersWithBinaryBody({}, bytes.length);
-    if (info && info.debug) {
-      headers["X-Location-Spoofer-Wifi-Count"] = String(info.wifiCount);
-      headers["X-Location-Spoofer-Cell-Count"] = String(info.cellCount || 0);
-    }
     if (isLoonRuntime()) {
       $done({
         status: 200,
@@ -1782,7 +1781,10 @@
       response: {
         status: 200,
         headers: headers,
-        body: bytes
+        // Shadowrocket's binary request scripts expect an ArrayBuffer for a
+        // locally synthesized response. A Uint8Array can be logged correctly
+        // while still being bridged to locationd as an unsupported JS object.
+        body: info && info.nativeBinary ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes
       }
     });
   }
@@ -1965,14 +1967,15 @@
         logRawDump("request-original", requestBody, config);
         var requestResult = spoofArpcRequest(requestBody, config);
         if (config.debug) {
-          console.log("Location spoofer request synthetic response: patched " + requestResult.wifiCount + " wifi devices, " + requestResult.cellCount + " cell towers, response=" + requestResult.response.length + " bytes");
+          console.log("Location spoofer request synthetic response: patched " + requestResult.wifiCount + " wifi devices, " + requestResult.cellCount + " cell towers, response=" + requestResult.response.length + " bytes, head=" + hexPreview(requestResult.response, 10) + ", nativeBinary=" + config.nativeBinary);
           console.log("Location spoofer patched locations: " + patchedPayloadSummary(requestResult.payload));
         }
         logRawDump("request-synthetic-response", requestResult.response, config);
         doneSyntheticResponse(requestResult.response, {
           wifiCount: requestResult.wifiCount,
           cellCount: requestResult.cellCount,
-          debug: config.debug
+          debug: config.debug,
+          nativeBinary: config.nativeBinary
         });
       } catch (err) {
         if (config.debug) {
