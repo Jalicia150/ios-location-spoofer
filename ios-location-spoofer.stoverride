@@ -25,7 +25,7 @@ http:
       binary-mode: true
       max-size: 1048576
       timeout: 10
-      argument: mode=response&latitude=37.3349&longitude=-122.00902&horizontalAccuracy=39&verticalAccuracy=1000&altitude=530&debug=false
+      argument: mode=response&metadataMode=legacy&latitude=37.3349&longitude=-122.00902&horizontalAccuracy=39&verticalAccuracy=1000&altitude=530&debug=false
   mitm:
     - gs-loc.apple.com
     - gs-loc-cn.apple.com
