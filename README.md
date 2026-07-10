@@ -17,7 +17,8 @@
 - **多平台支持** — 从单一 iOS App 扩展到五个代理软件，覆盖更多用户
 - **蜂窝基站坐标修改** — 原版 Go 只改了 WiFi 热点坐标，JS 版额外处理了 CellTower（字段 22/24）的坐标替换
 - **多响应格式兼容** — 自动检测 Apple 回应的封装格式（ARPC / synthetic / marker / bare），确保改后还能被 iOS 正确识别
-- **运动状态伪造** — 一并改写 motionActivityType 和 motionActivityConfidence，减少被系统识破的可能
+- **可选字节级元数据保留** — `metadataMode=preserve` 只替换经纬度，保留 Apple 返回的精度、海拔、运动状态、设备类型和未知字段
+- **兼容现有配置** — 普通模块继续默认使用 `metadataMode=legacy`，保持原先的精度、海拔和运动状态改写行为
 
 ## 怎么回事
 
@@ -36,6 +37,15 @@ iPhone 看 Wi-Fi 信号和基站信号，拿着 BSSID 列表去问 Apple 这些�
 | Stash | `ios-location-spoofer.stoverride` | 覆写 → 安装覆写 | ✅ 实测通过 |
 
 > 欢迎测过的佬友在 Issue 区报实测结果；不通的地方欢迎直接提 PR 改 —— 至少写明**哪个软件、哪个版本、什么系统、报错的日志原文**。
+
+### iOS 27 实验性 Shadowrocket 模式
+
+[`ios-location-spoofer-ios27-experimental.sgmodule`](ios-location-spoofer-ios27-experimental.sgmodule) 组合了 acheong08 的请求侧本地响应设计和 Joy-cwz 的字节级经纬度改写：
+
+1. 只改 protobuf 里的纬度和经度，其他字段按原始字节保留。
+2. 尝试在请求到达 Apple 前返回本地合成的 HTTP 200 WLOC 响应，以绕过 iOS 27 Beta 上 Apple 返回的 `400 Bad Request`。
+
+这是**实验功能，不是 iOS 27 支持保证**，目前只通过本地脚本测试，仍需在真实 Shadowrocket/iOS 27 设备上验证请求是否确实被本地响应截断。只适用于 Shadowrocket；不要与普通 `ios-location-spoofer.sgmodule` 同时启用。解析失败时默认放行原请求，不会返回猜测或部分生成的数据；这时 Apple 仍可能返回原来的 `400 Bad Request`。
 
 ## 怎么用
 
@@ -69,10 +79,11 @@ latitude=39.9042&longitude=116.4074
 |------|--------|------|
 | `latitude` | 37.3349 | 目标纬度 |
 | `longitude` | -122.00902 | 目标经度 |
+| `metadataMode` | legacy | `preserve` 只改经纬度；`legacy` 使用旧版元数据改写 |
 | `address` | （空） | 地址搜索（Loon 插件 UI 填写，联网解析为经纬度，优先于手动经纬度） |
-| `horizontalAccuracy` | 39 | 水平精度 |
-| `verticalAccuracy` | 1000 | 垂直精度 |
-| `altitude` | 530 | 海拔 |
+| `horizontalAccuracy` | 39 | 水平精度，仅 `legacy` 模式使用 |
+| `verticalAccuracy` | 1000 | 垂直精度，仅 `legacy` 模式使用 |
+| `altitude` | 530 | 海拔，仅 `legacy` 模式使用 |
 | `failOpen` | true | 出错放行原数据 |
 | `debug` | false | 调试日志 |
 
@@ -80,6 +91,7 @@ latitude=39.9042&longitude=116.4074
 
 ```
 ios-location-spoofer.sgmodule       # Shadowrocket
+ios-location-spoofer-ios27-experimental.sgmodule # Shadowrocket 请求侧实验模式
 ios-location-spoofer-surge.sgmodule # Surge
 ios-location-spoofer.lnplugin       # Loon
 ios-location-spoofer.snippet        # Quantumult X
